@@ -1,0 +1,3 @@
+# Check docker image build
+
+This test ensures the docker controller image can be build (not pushed) on Linux and Windows.
