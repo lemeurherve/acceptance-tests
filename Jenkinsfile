@@ -2,7 +2,8 @@
 
 /*
  * Making sure that we can follow the steps necessary to install the latest
- * release for Debian/Ubuntu machine.
+ * release on a Windows machine using the MSI installer.
+ * See https://www.jenkins.io/doc/book/installing/windows/
  */
 
 properties([
@@ -16,7 +17,7 @@ properties([
 ])
 
 // Define processors
-def Processors = [ "s390xdocker", "docker" ] // "arm64docker", "ppc64ledocker", excluded because test machine cannot download the jenkins package
+def Processors = ['windows-2025']
 
 // Generate a parallel step for each label in labels
 def generateParallelSteps(labels) {
@@ -25,33 +26,54 @@ def generateParallelSteps(labels) {
         def label = unboundLabel // Bind label before the closure
         parallelNodes[label] = {
             node(label) {
-                timestamps {
-                    docker.image('debian').inside('-u 0:0') {
-                        stage('Prepare Container') {
-                            sh 'apt-get update -q -y && apt-get install -q -y --allow-change-held-packages curl ca-certificates apt-transport-https'
-                        }
+                stage('Download MSI') {
+                    powershell 'Invoke-WebRequest -Uri https://get.jenkins.io/windows/latest/jenkins.msi -OutFile jenkins.msi'
+                }
 
-                        stage('Add the apt key') {
-                            sh 'curl -fsSL https://pkg.jenkins.io/debian/jenkins.io-2026.key | tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null'
-                        }
 
-                        stage('Install Jenkins from apt') {
-                            sh  '''
-                                echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian binary/ | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
-                                apt-get update && apt-get install -qy jenkins
-                                '''
+                stage('Install Jenkins from MSI') {
+                    powershell '''
+                        # Ensure the Windows Installer service is running before calling msiexec
+                        $svc = Get-Service -Name msiserver -ErrorAction Stop
+                        if ($svc.Status -ne "Running") {
+                            Start-Service msiserver -ErrorAction Stop
                         }
-                    }
+                        $msi = Join-Path (Get-Location) "jenkins.msi"
+                        $log = Join-Path (Get-Location) "jenkins-install.log"
+                        $proc = Start-Process msiexec.exe `
+                            -ArgumentList "/i `"$msi`" /qn /norestart /L*v `"$log`"" `
+                            -Wait -PassThru
+                        if ($proc.ExitCode -ne 0) {
+                            if (Test-Path $log) { Get-Content $log | Select-Object -Last 50 }
+                            throw "msiexec failed with exit code $($proc.ExitCode)"
+                        }
+                    '''
+                }
+
+                stage('Verify Jenkins service') {
+                    powershell '''
+                        $timeout = 60
+                        $elapsed = 0
+                        do {
+                            $svc = Get-Service -Name Jenkins -ErrorAction SilentlyContinue
+                            if ($svc -and $svc.Status -eq 'Running') { break }
+                            Start-Sleep -Seconds 5
+                            $elapsed += 5
+                        } while ($elapsed -lt $timeout)
+                        if (-not $svc -or $svc.Status -ne 'Running') {
+                            throw "Jenkins service did not reach Running state within ${timeout}s (status: $($svc.Status))"
+                        }
+                        Write-Host "Jenkins service is Running"
+                    '''
                 }
             }
         }
-    }  
+    }
     return parallelNodes
 }
 
-
 timeout(unit: 'MINUTES', time:29) {
-       stage("Processor") {
-               parallel generateParallelSteps(Processors)
-        }
+    stage('Processor') {
+        parallel generateParallelSteps(Processors)
+    }
 }

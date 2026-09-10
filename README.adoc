@@ -1,6 +1,3 @@
-= Install the latest Debian package
+= Install the latest Windows MSI
 
-This test accesses the apt repository at
-link:https://pkg.jenkins.io/debian[pkg.jenkins.io/debian],
-downloads the referenced key file, and attempts to install Jenkins inside of
-the `debian:latest` container.
+This test downloads the MSI file then attempts to install Jenkins service on the Windows agent.
